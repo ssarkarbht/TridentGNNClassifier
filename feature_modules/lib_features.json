@@ -1,0 +1,56 @@
+{
+"charge_threshold" : 0.50,
+"feature_keys" : {
+	"ResidualTime" : {
+		"mincut" : -8e2,
+		"maxcut" : 5e3,
+	},
+	"PhotonTrackLength" : {
+		"mincut" : null,
+		"maxcut" : null,
+		"normalize" : true,
+		"scale" : true
+	},
+	"ChargeFirstPulse" : {
+		"mincut" : null,
+		"maxcut" : null,
+		"normalize" : false
+	},
+	"TrackDOMDistance" : {
+		"mincut" : null,
+		"maxcut" : null,
+		"normalize" : false
+	},
+	"TotalCharge" : {
+		"mincut" : null,
+		"maxcut" : null,
+		"normalize" : false
+	},
+	"TimeMaxPulse" : {
+		"mincut" : null,
+		"maxcut" : null,
+		"normalize" : false
+	},
+	"ChargeMaxPulse" : {
+		"mincut" : null,
+		"maxcut" : null,
+		"normalize" : false
+	},
+	"DeltaTimeStd" : {
+		"mincut" : null,
+		"maxcut" : null,
+		"normalize" : false
+	}
+},
+
+"vertex_keys" : {
+	"keep_omkey" : false,
+	"vertex_pos" : ["EdgePositionX", "EdgePositionY", "EdgePositionZ"],
+	"vertex_dir" : ["EdgeDirectionX", "EdgeDirectionY", "EdgeDirectionZ"],
+	"vertex_cor" : ["EdgeCoordinateX", "EdgeCoordinateY", "EdgeCoordinateZ"]
+},
+
+"metadata_keys" : {
+	""
+}
+}

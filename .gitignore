@@ -1,0 +1,13 @@
+memmaps
+memmaps_arxive
+__pycache__
+dataset
+trained_model_database
+GeoCalibDetectorStatus_2016.57531_V0.i3.gz
+dom_positions2.pkl
+feature_study.py
+test_*
+log
+TestBed
+*.swp
+.ipynb_checkpoints
