@@ -15,8 +15,11 @@ import h5py as h5
 import os
 from collections import defaultdict
 
-VALIDATION_FRACTION = 0.15
-TESTING_FRACTION    = 0.15
+#VALIDATION_FRACTION = 0.5
+#TESTING_FRACTION    = 0.5
+
+VALIDATION_FRACTION = 0.0
+TESTING_FRACTION    = 0.0#0.15
 
 def extract_dataset(f, idxs, dir, prefix, column_types):
 	'''
@@ -107,8 +110,10 @@ def extract_dataset(f, idxs, dir, prefix, column_types):
 
 
 if __name__ == '__main__':
-	input = '../dataset/resampled_dataset_4/full_dataset.h5'
-	output = '../dataset/resampled_dataset_4/dataset_split'
+#	input = '../dataset/resampled_dataset_3/testval_dataset.h5'
+#	output = '../dataset/resampled_dataset_3/dataset_split/testval_shuffle'
+	input = '../dataset/weight_dataset_10/full_dataset.h5'
+	output = '../dataset/weight_dataset_10/dataset_split/'
 	os.makedirs(output, exist_ok=True)
 	with h5.File(input,'r') as f:
 		N_events = f['VertexNumber'].shape[0]

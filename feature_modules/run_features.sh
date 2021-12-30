@@ -6,18 +6,18 @@ i3_env=/cvmfs/icecube.opensciencegrid.org/py3-v4.1.1/RHEL_7_x86_64/metaprojects/
 run_script=/data/user/ssarkar/TridentProduction/reconstruction/trident_gnn/feature_modules/create_features.py
 
 #infileloc=/data/user/ssarkar/TridentProduction/simulation/datasim/resample_cc/run01/
-#outfileloc=/data/user/ssarkar/TridentProduction/reconstruction/trident_gnn/dataset/resampled_dataset_4/
+#outfileloc=/data/user/ssarkar/TridentProduction/reconstruction/trident_gnn/dataset/resampled_dataset_9/
 #itype=2
 
 infileloc=/data/user/ssarkar/TridentProduction/simulation/datasim/resampled_numu/run01/
-outfileloc=/data/user/ssarkar/TridentProduction/reconstruction/trident_gnn/dataset/resampled_dataset_4/
+outfileloc=/data/user/ssarkar/TridentProduction/reconstruction/trident_gnn/dataset/resampled_dataset_9/
 itype=1
 
 
 #for i in {1..2}
 #do
 i=1
-	for j in {6..10}
+	for j in {1..10}
 	do
 		for k in {1..5}
 		do

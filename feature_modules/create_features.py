@@ -3,16 +3,18 @@
 Author: Sourav Sarkar
 Date: May 3, 2021
 Email: ssarkar1@ualberta.ca
-Objective: This script takes the L2 level eventfiles
+Description: This script takes the L2 level eventfiles
 	and extrtacts the relevant information to
 	prepare dataset for the graph neural network,
 	in addition it also stores the metadata needed
 	to track additonal event information.
+
 '''
 
 #Import necessary modules
-from icecube import icetray, dataio, phys_services
+from icecube import icetray, dataio, phys_services, NewNuFlux
 from icecube import dataclasses as dc
+from icecube import common_variables as cv
 from I3Tray import I3Tray
 from icecube.hdfwriter import I3HDFWriter
 from icecube.tableio import I3TableWriter
@@ -21,7 +23,7 @@ from glob import glob
 import sys
 import tables
 import numpy as np
-
+import ctypes
 
 #load the GCD file for extracting DOM geometry
 f_geo = dataio.I3File('/data/user/ssarkar/TridentProduction/reconstruction/trident_gnn/feature_modules/GeoCalibDetectorStatus_2016.57531_V0.i3.gz')
@@ -34,7 +36,7 @@ class extract_data():
 	'''
 	Input: frame from an I3 file and geometry object
 	'''
-	def __init__(self, frame, geo, reco='OnlineL2_SplineMPE', pulses='SRTInIcePulses', charge_threshold=0.5):
+	def __init__(self, frame, geo, reco='OnlineL2_SplineMPE', pulses='SRTInIcePulses', charge_threshold=0.5, graph_feature=False):
 		#List of keys for the DOM properties dictionary
 		self.vertex_features=['ResidualTime', 
                 'PhotonTrackLength', 'ChargeFirstPulse', 'TrackDOMDistance',
@@ -56,6 +58,15 @@ class extract_data():
 			self.dom_pos[i] = geo.omgeo.get(i).position
 		#Set the charge threshold for each DOM pulse to be considered
 		self.charge_threshold = charge_threshold
+		self.geo = geo
+		if graph_feature:
+			#empty dictionary to use for storing dom cherenkov positions on track
+			self.dom_chpos = {}
+			for omkey in geo.omgeo.keys():
+				dom = geo.omgeo.get(omkey)
+				pos = phys_services.I3Calculator.cherenkov_position(self.track_reco, dom.position)
+				pos_len = (pos.x-self.track_reco.pos.x)/self.track_reco.dir.x
+				self.dom_chpos[omkey] = pos_len
 
 	def dom_residual_time(self, omkey, mincut=-800., maxcut=5000.):
 		'''
@@ -138,7 +149,8 @@ class extract_data():
 		total_charge = np.sum(charge)
 		#Charge and time of the maximum charge pulse
 		max_charge = charge.max()
-		max_time   = time[charge.argmax()]
+		#changing the max time to relative time w.r.t. first hittime in the DOM
+		max_time   = time[charge.argmax()] - self.time_threshold
 		#standard deviation of the time differences between two consecutive pulse
 		time_difference     = np.diff(time)
 		if len(time_difference)==0: time_difference_std = 0.
@@ -197,15 +209,60 @@ class extract_data():
 			edges['EdgeCoordinateZ'].append(self.dom_pos[omkey].z)
 			assert omkey not in omkeys
 			omkeys.append(omkey)
+		self.total_tracklength = max(features['PhotonTrackLength']) - min(features['PhotonTrackLength'])
+		self.total_charge = sum(features['TotalCharge'])
 		if feature_scale and len(features['ResidualTime'])!=0:
-			total_tracklength = max(features['PhotonTrackLength']) - min(features['PhotonTrackLength'])
-			features['PhotonTrackLength'] = list(np.array(features['PhotonTrackLength'])/(total_tracklength+1e-8) - 0.5)
-		return features, edges, np.array(omkeys)
+			features['PhotonTrackLength'] = list(np.array(features['PhotonTrackLength'])/(self.total_tracklength+1e-8) - 0.5)
+			features['TotalCharge'] = list(np.array(features['TotalCharge'])/self.total_charge)
 
-def process_frame(frame, interaction_type=-1, runid=-1):
+		return features, edges, omkeys
+
+	#next few functions are for calculating the graph/event features
+	def track_intensity(self, omkeys, charges, chdist, seglen=100):
+		'''this function calculates the weighted track light intensity
+		for the first and last segment of the track
+		Input:
+		omkeys (list): list of omkeys that pass the node feature criteria for the event
+		charges (list): list of total charge per DOM
+		chdist (list): list of DOM cherenkov distance from track
+		seglen (float): track segment length to consider the intensity for
+		'''
+		#failsafe for indexing the DOM selections within the track segment
+		if len(omkeys)!=len(charges):
+			assert False, "List lengths not the same for OMKeys, Charges. Proper indexing cannot be implemented"
+		#get the cherenkov position from initially calculated dictionary for all DOMs
+		ch_pos = []
+		for omkey in omkeys:
+			ch_pos.append(self.dom_chpos[omkey])
+		#calculate the minimum and maximum cherenkov postion along the tracks among all hit DOMs
+		min_pos = min(ch_pos)
+		max_pos = max(ch_pos)
+		#get the index of the DOMs for which ch. positions are within the track segment
+		iselect = np.where(np.array(ch_pos)<=min_pos+seglen)[0]
+		fselect = np.where(np.array(ch_pos)>=max_pos-seglen)[0]
+		#calculate the numerators
+		inum = np.sum(np.array(charges)[iselect]*np.exp(np.array(chdist)[iselect]/100.)*np.array(chdist)[iselect])
+		fnum = np.sum(np.array(charges)[fselect]*np.exp(np.array(chdist)[fselect]/100.)*np.array(chdist)[fselect])
+		#calculate denominator (i.e. total number of DOMs in the phasespace)
+		idum = len(np.where((np.array(list(self.dom_chpos.values()))>=min_pos)&(np.array(list(self.dom_chpos.values()))<=min_pos+seglen)))
+		fdum = len(np.where((np.array(list(self.dom_chpos.values()))>=max_pos-seglen)&(np.array(list(self.dom_chpos.values()))<=max_pos)))
+
+		return (inum/idum, fnum/fdum)
+
+	def track_smoothness(self, radius=1000.):
+		'''This function calculates the track smoothness for charges seen by the hit DOMs
+		(a braod measurement of track's stochastic loss)
+		'''
+		tvalues = cv.track_characteristics.calculate_track_characteristics(self.geo, self.dom_hits, self.track_reco, radius*icetray.I3Units.m)
+		return abs(tvalues.track_hits_distribution_smoothness)
+
+flux_model = NewNuFlux.makeFlux('honda2006')
+
+def process_frame(frame, mctree='I3MCTree_postMuonProp', interaction_type=-1, runid=-1, event_feature=False, book_weight=False):
+	global flux_model
 	#check if the physics frame is InIceSplit
 	if frame['I3EventHeader'].sub_event_stream!='InIceSplit': return False
-
+	
 	#Check if the frame has the desired reconstruction
 	if not(frame.Has('OnlineL2_SplineMPE')): return False
 
@@ -213,16 +270,18 @@ def process_frame(frame, interaction_type=-1, runid=-1):
 
 	#Primary particle Truth info
 	frame['InteractionType']= dc.I3Double(interaction_type)
-	nu = frame['I3MCTree_postMuonProp'].get_primaries()[0]
+	nu = frame[mctree].get_primaries()[0]
 	frame['InteractionVertex'] = dc.I3VectorFloat([nu.pos.x,nu.pos.y,nu.pos.z])
 
 	frame['NeutrinoEnergy'] = dc.I3Double(nu.energy)
 	frame['NeutrinoPDGCode']= dc.I3Double(nu.pdg_encoding)
 	frame['NeutrinoAzimuth']= dc.I3Double(nu.dir.azimuth)
 	frame['NeutrinoZenith'] = dc.I3Double(nu.dir.zenith)
-
+	#frame['MajorID'] = dc.I3String(str(nu.major_id))
+	#frame['MinorID'] = dc.I3String(str(nu.minor_id))
+	frame['PrimaryID'] = dc.I3VectorUInt64([nu.major_id, nu.minor_id])
 	#Secondary particle Truth info
-	secondaries = frame['I3MCTree_postMuonProp'].get_daughters(nu)
+	secondaries = frame[mctree].get_daughters(nu)
 	if interaction_type==1:
 		MuMinus     = secondaries[1]
 		MuPlus      = secondaries[2]
@@ -243,7 +302,6 @@ def process_frame(frame, interaction_type=-1, runid=-1):
 		frame['HadronEnergy']= dc.I3Double(secondaries[1].energy)
 
 	frame['RunID']  = icetray.I3Int(runid)
-	frame['EventID'] = icetray.I3Int(frame['I3EventHeader'].event_id)
 
 	track_reco = frame['OnlineL2_SplineMPE']
 	frame['RecoX'] = dc.I3Double(track_reco.pos.x)
@@ -252,8 +310,8 @@ def process_frame(frame, interaction_type=-1, runid=-1):
 	frame['RecoAzimuth'] = dc.I3Double(track_reco.dir.azimuth)
 	frame['RecoZenith']  = dc.I3Double(track_reco.dir.zenith)
 
-	extract = extract_data(frame,geo)
-	features, edges, _ = extract.get_frame_data()
+	extract = extract_data(frame,geo,graph_feature=event_feature)
+	features, edges, omkeys = extract.get_frame_data()
 
 	for f_key in features.keys():
 		frame[f_key] = dc.I3VectorFloat(features[f_key])
@@ -261,11 +319,31 @@ def process_frame(frame, interaction_type=-1, runid=-1):
 		frame[e_key] = dc.I3VectorFloat(edges[e_key])
 
 	frame['VertexNumber'] = icetray.I3Int(len(features[list(features.keys())[0]]))
+
+	#get the event features
+	if event_feature:
+		charge_arr = list(np.array(features['TotalCharge'])*extract.total_charge)
+		i_int, f_int = extract.track_intensity(omkeys, charge_arr, features['TrackDOMDistance'])
+		frame['InitialTrackIntensity'] = dc.I3Double(i_int)
+		frame['FinalTrackIntensity']   = dc.I3Double(f_int)
+		frame['TrackSmoothness'] = dc.I3Double(extract.track_smoothness())
+		frame['EventCharge'] = dc.I3Double(extract.total_charge)
+		frame['EventTracklength'] = dc.I3Double(extract.total_tracklength)
+		if extract.total_tracklength<117.:
+			return False
+	if book_weight:
+		onew = frame['I3MCWeightDict']['OneWeight']
+		flux1 = flux_model.getFlux(dc.I3Particle.NuMu, nu.energy, np.cos(nu.dir.zenith))
+		flux2 = flux_model.getFlux(dc.I3Particle.NuMuBar, nu.energy, np.cos(nu.dir.zenith))
+		flux3 = 1.44e-18*(nu.energy/1e5)**(-2.28)
+		tot_flux = flux1+flux2+flux3
+		raww = onew*tot_flux
+		frame['WeightFactor'] = dc.I3Double(raww)
 #	frame['OneWeight']    = dc.I3Double(frame['I3MCWeightDict']['OneWeight'])
 #	frame['NEvents']      = icetray.I3Int(frame['I3MCWeightDict']['NEvents'])
 	return True
 
-def create_dataset(infiles, outfile, int_type, rid):
+def create_dataset(infiles, outfile, int_type, rid, book_eventfeature=False, book_weight=False):
 	vertex_features = ['ResidualTime',
                 'PhotonTrackLength', 'ChargeFirstPulse', 'TrackDOMDistance',
                 'TotalCharge', 'TimeMaxPulse', 'ChargeMaxPulse', 'DeltaTimeStd']
@@ -273,18 +351,23 @@ def create_dataset(infiles, outfile, int_type, rid):
 	edge_info = ['EdgePositionX', 'EdgePositionY', 'EdgePositionZ',
                     'EdgeDirectionX', 'EdgeDirectionY', 'EdgeDirectionZ',
                     'EdgeCoordinateX', 'EdgeCoordinateY', 'EdgeCoordinateZ']
+	if book_eventfeature:
+		event_features = ['InitialTrackIntensity', 'FinalTrackIntensity',
+				'TrackSmoothness', 'EventCharge', 'EventTracklength']
+	else:
+		event_features = []
 
 	metadata_keys = ['InteractionType', 'InteractionVertex',
                    'NeutrinoEnergy', 'NeutrinoPDGCode', 'NeutrinoAzimuth', 'NeutrinoZenith',
                    'TrackEnergy', 'TrackPDGCode', 'TrackAzimuth', 'TrackZenith', 'TrackLength',
-                   'RunID', 'EventID', 'RecoX', 'RecoY', 'RecoZ', 'RecoAzimuth', 'RecoZenith',
-                   'VertexNumber', 'HadronEnergy']#,'OneWeight','NEvents']
+                   'RunID', 'PrimaryID', 'RecoX', 'RecoY', 'RecoZ', 'RecoAzimuth', 'RecoZenith',
+                   'VertexNumber', 'HadronEnergy', 'WeightFactor']#,'OneWeight','NEvents']
 
 	tray = I3Tray()
 	tray.AddModule('I3Reader', FilenameList=infiles)
-	tray.AddModule(process_frame, 'process_frame', interaction_type=int_type,
-                       runid=rid, Streams=[icetray.I3Frame.Physics])
-	tray.AddModule(I3TableWriter, 'I3TableWriter', keys=vertex_features+edge_info+metadata_keys,
+	tray.AddModule(process_frame, 'process_frame', mctree="I3MCTree", interaction_type=int_type,
+                       runid=rid, event_feature=book_eventfeature, book_weight=book_weight, Streams=[icetray.I3Frame.Physics])
+	tray.AddModule(I3TableWriter, 'I3TableWriter', keys=vertex_features+edge_info+event_features+metadata_keys,
                             TableService=I3HDFTableService(outfile),
                             SubEventStreams=['InIceSplit'],
                             BookEverything=False)
@@ -293,6 +376,7 @@ def create_dataset(infiles, outfile, int_type, rid):
 
 if __name__=='__main__':
 	from optparse import OptionParser
+	#get the command line arguments set up
 	parser=OptionParser()
 	parser.add_option("-b", "--BatchNumber", dest="BATCH", type=int)
 	parser.add_option("-d", "--DatasetNumber", dest="DSET", type=int)
@@ -310,24 +394,31 @@ if __name__=='__main__':
 
 	infile_path = options.FLOC
 	outfile_path = options.OUT
+	#create runid from interaction type, primary neutrin type, dataset, file of the simulation sets
 	rid = int(options.ITYPE*1e6+options.PTYPE*1e5+1e3+options.DSET*1e1+options.BATCH)
+	#if trident interaction and neutrino set the follwoing filenames and locations
 	if options.ITYPE==1 and options.PTYPE==1:
 		fileloc = dset_dict[options.DSET]+'/L2File/'
-		filename = 'NumuEvent_L2_D'+'{:02d}'.format(options.DSET)+'_B'+'{:1d}'.format(options.BATCH)+'_preselection.i3'
+		filename = 'NumuEvent_L2_D'+'{:02d}'.format(options.DSET)+'_B'+'{:1d}'.format(options.BATCH)+'_updated.i3'
 		filename = fileloc+filename
 		outfile = 'NumuEvent_L2_D'+'{:02d}'.format(options.DSET)+'_B'+'{:1d}'.format(options.BATCH)+'_resampled.h5'
 
+	#if standard cc interaction and neutrino, set the following filenames and location
 	elif options.ITYPE==2 and options.PTYPE==1:
 		fileloc = dset_dict[options.DSET]+'/L2Files/'
-		filename = 'Numu_CC_L2_D'+'{:02d}'.format(options.DSET)+'_B'+'{:1d}'.format(options.BATCH)+'_preselection.i3'
+		#filename = 'Numu_CC_L2_D'+'{:02d}'.format(options.DSET)+'_B'+'{:1d}'.format(options.BATCH)+'_preselection.i3'
+		filename = 'Numu_CC_L2_D'+'{:02d}'.format(options.DSET)+'_B'+'{:1d}'.format(options.BATCH)+'_updated.i3'
 		filename = fileloc+filename
 		outfile = 'Numu_CC_L2_D'+'{:02d}'.format(options.DSET)+'_B'+'{:1d}'.format(options.BATCH)+ '_resampled.h5'
 
+	#if standard cc interaction and anti-neutrino, set the following filenames and location
 	elif options.ITYPE==2 and options.PTYPE==2:
 		fileloc = dset_dict[options.DSET]+'/L2Files/'
-		filename = 'NumuBar_CC_L2_D'+'{:02d}'.format(options.DSET)+'_B'+'{:1d}'.format(options.BATCH)+'_preselection.i3'
+		#filename = 'NumuBar_CC_L2_D'+'{:02d}'.format(options.DSET)+'_B'+'{:1d}'.format(options.BATCH)+'_preselection.i3'
+		#filename = 'NumuBar_CC_L2_D'+'{:02d}'.format(options.DSET)+'_B'+'{:1d}'.format(options.BATCH)+'_updated.i3'
+		filename = 'NumuBarEvent_CC_L2_D'+'{:02d}'.format(options.DSET)+'_B'+'{:1d}'.format(options.BATCH)+'_ww.i3'
 		filename = fileloc+filename
-		outfile = 'NumuBar_CC_L2_D'+'{:02d}'.format(options.DSET)+'_B'+'{:1d}'.format(options.BATCH)+'_resampled.h5'
+		outfile = 'NumuBar_CC_L2_D'+'{:02d}'.format(options.DSET)+'_B'+'{:1d}'.format(options.BATCH)+'_ww.h5'
 
 #	infile_path = '/data/user/ssarkar/TridentProduction/simulation/datasim/numu/run01/dataset_01/L2Files/'
 #	infile_path = '/data/user/ssarkar/TridentProduction/simulation/datasim/resampled_numu/run01/dataset_01/L2File/'
@@ -342,4 +433,7 @@ if __name__=='__main__':
 #	outfile = 'NumuEvent_L2_D01_B1_resampled.h5'
 	print ("Creating dataset with following details: ")
 	print (f"Infile: {infile_path+filename} \n Outfile: {outfile_path+outfile} \n RunID: {rid}")
-	create_dataset([infile_path+filename],outfile_path+outfile,options.ITYPE,rid)
+	#The following one does not book the event features
+#	create_dataset([infile_path+filename],outfile_path+outfile,options.ITYPE,rid)
+	#The following one stores event features
+	create_dataset([infile_path+filename],outfile_path+outfile,options.ITYPE,rid, book_eventfeature=True, book_weight=True)

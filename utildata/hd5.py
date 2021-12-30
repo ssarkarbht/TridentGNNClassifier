@@ -1,8 +1,12 @@
 #!/bin/python
 import numpy as np
+import pickle
 import h5py
+from collections import defaultdict
+import tempfile
 import os
 import hashlib
+from sklearn.metrics import pairwise_distances
 from sklearn.utils.class_weight import compute_sample_weight
 
 import torch.utils.data
@@ -120,15 +124,81 @@ class ShuffledTorchHD5Dataset(torch.utils.data.Dataset):
 		return compute_sample_weight(class_weights, targets)
 
 
-def event_filter(file)#, min_track_length=None, max_cascade_energy=None, min_total_energy=None, max_total_energy=None,flavors=None, currents=None):
+def event_filter(file, min_track_length=None, max_cascade_energy=None, min_total_energy=None, max_total_energy=None,flavors=None, currents=None):
 	""" Filters events by certain requiremenents.
 	Parameters:
 	file : h5py.File
 		The file from which to extract the attributes for each event.
+	min_track_length : float or None
+		All events with a track length lower than this will be excluded
+		(events with no track will not be removed).
+	max_cascade_energy : float or None
+		All events with a track length that is not nan will be excluded
+		if their cascade energy exceeds that threshold.
+	min_total_energy : float or None
+		All events with a total energy (cascade + muon) less than that will be excluded.
+	max_total_energy : float or None
+		All events with a total energy (cascade + muon) more than that will be excluded.
+	flavors : list or None
+		Only certain neutrino flavor events will be considered if given.
+	currents : list or None
+		Only certain current events will be considered if given. 
+
 	Returns:
 	filter : ndarray, shape [N], dtype=np.bool
 		Only events that passed all filters are masked with True.
 	"""
+	#track_length = np.array(file['TrackLength'])
+	#cascade_energy = np.array(file['CascadeEnergy'])
+	#muon_energy = np.array(file['MuonEnergy'])
+	#muon_energy[np.isnan(muon_energy)] = 0
+	#total_energy = cascade_energy.copy()
+	#total_energy[np.isnan(total_energy)] = 0
+	#total_energy += muon_energy
+        
 	filter = np.ones(file['VertexNumber'].shape[0], dtype=np.bool)
+	#has_track_length = ~np.isnan(track_length)
+
+	# Track length filter
+	if min_track_length is not None:
+		idx_removed = np.where(np.logical_and((track_length < min_track_length), has_track_length))[0]
+		filter[idx_removed] = False
+		print(f'After Track Length filter {filter.sum()} / {filter.shape[0]} events remain.')
+
+	# Cascade energy filter
+	if max_cascade_energy is not None:
+		idx_removed = np.where(np.logical_and((cascade_energy > max_cascade_energy), has_track_length))
+		filter[idx_removed] = False
+		print(f'After Cascade Energy filter {filter.sum()} / {filter.shape[0]} events remain.')
+
+	# Flavor filter
+	if flavors is not None:
+		pdg_encoding = np.array(file['PDGEncoding'])
+		flavor_mask = np.zeros_like(filter, dtype=np.bool)
+		for flavor in flavors:
+			flavor_mask[np.abs(pdg_encoding) == flavor] = True
+		filter = np.logical_and(filter, flavor_mask)
+		print(f'After Flavor filter {filter.sum()} / {filter.shape[0]} events remain.')
+
+	# Current filter
+	if currents is not None:
+		interaction_type = np.array(file['InteractionType'])
+		current_mask = np.zeros_like(filter, dtype=np.bool)
+		for current in currents:
+			current_mask[np.abs(interaction_type) == current] = True
+		filter = np.logical_and(filter, current_mask)
+		print(f'After Current filter {filter.sum()} / {filter.shape[0]} events remain.')
+
+	# Min total nergy filter
+	if min_total_energy is not None:
+		idx_removed = np.where(total_energy < min_total_energy)[0]
+		filter[idx_removed] = False
+		print(f'After Min Total Energy filter {filter.sum()} / {filter.shape[0]} events remain.')
+
+	# Max total energy filter
+	if max_total_energy is not None:
+		idx_removed = np.where(total_energy > max_total_energy)[0]
+		filter[idx_removed] = False
+		print(f'After Max Total Energy filter {filter.sum()} / {filter.shape[0]} events remain.')
 
 	return filter

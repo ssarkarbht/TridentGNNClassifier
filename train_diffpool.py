@@ -166,9 +166,9 @@ if __name__ == '__main__':
     batch_size = settings['training']['batch_size']
 
     data_train, data_val, data_test = util.pygdataset_from_config(settings)
-    train_loader = pyg_data.DataLoader(data_train, batch_size=batch_size, shuffle=settings['dataset']['shuffle'])
-    val_loader = pyg_data.DataLoader(data_val, batch_size=batch_size, shuffle=settings['dataset']['shuffle'])
-    test_loader = pyg_data.DataLoader(data_test, batch_size=batch_size, shuffle=settings['dataset']['shuffle'])
+    train_loader = pyg_data.DataLoader(data_train, batch_size=batch_size, shuffle=settings['dataset']['shuffle'],follow_batch=['graphx'])
+    val_loader = pyg_data.DataLoader(data_val, batch_size=batch_size, shuffle=settings['dataset']['shuffle'],follow_batch=['graphx'])
+    test_loader = pyg_data.DataLoader(data_test, batch_size=batch_size, shuffle=settings['dataset']['shuffle'],follow_batch=['graphx'])
 
     model = util.model_from_config(settings)
     if torch.cuda.is_available():
@@ -207,6 +207,7 @@ if __name__ == '__main__':
         for batch_idx, data in enumerate(train_loader):
             optimizer.zero_grad()
             y_pred, _, _ = model(data)
+
             targets = data.y.unsqueeze(1)
             loss = loss_function(y_pred, targets)
             loss.backward()
@@ -237,7 +238,8 @@ if __name__ == '__main__':
             validation_metrics[metric].append(value)
         # Update learning rate, scheduler uses last accuracy as cirterion
         if lr_scheduler:
-            lr_scheduler.step(validation_metrics['accuracy'][-1])
+            #lr_scheduler.step(validation_metrics['accuracy'][-1])
+            lr_scheduler.step(validation_metrics['auc'][-1])
 
         # Save model parameters
         checkpoint_path = os.path.join(training_dir, f'model_{epoch + 1}')

@@ -23,24 +23,9 @@ import torch_geometric.utils as tg_utils
 from .pyggnnstack import *
 
 class GNNDiffPool(nn.Module):
-    '''Main class to construct GCN model with differential pooling '''
     def __init__(self, input_dim, emb_dim=32, pool_dim=16, num_hidden_emblayer=3, num_hidden_poollayer=3,
                 num_mlp_layer=[1], num_poollevel=3, num_clusters=[8,4,2], use_batchnorm=True,
                 use_residual=False, dropout_rate=0.3, **kwargs):
-        '''Inputs:
-        input_dim (int): dimension of the input feature vector for the nodes
-        emb_dim  (int): number of neurons in each hidden (and output) layer of graph embedding computation
-        pool_dim (int): number of neurons in each hidden (and output) layer of graph pooling assignment
-                    matrix computation
-        num_hidden_emblayer (int): number of hidden embedding layer
-        num_hidden_poollayer (int): numver of hidden pooling layers
-        num_mlp_layer (list): list of dimensions for each MLP layers after graph convolution
-        num_poollevel (int): number of levels to pool nodes into new clusters
-        num_clusters (list): list of number of clusters in each level to pool to.
-        use_batchnorm (bool): whether to use batch normalization in graph convolution
-        use_residual (bool): whether to use residual network in graph convolution
-        dropout_rate (float): rate at which to kill random neurons for dropout regularization
-        '''
         super(GNNDiffPool, self).__init__(**kwargs)
 
         assert (num_poollevel==len(num_clusters)), f'Number of pooling layer: {num_poollayer} and cluster target {num_clusters} mismatch'
@@ -68,7 +53,7 @@ class GNNDiffPool(nn.Module):
 
 
             self.gnn_pool.append(GNNStack(emb_input, hidden_graph_dim = hidden_poolgraph_dim, 
-                                output_dim = num_clusters[i], dropout_rate = False,
+                                output_dim = num_clusters[i], output_activation=False, dropout_rate = False,
                                 use_batchnorm = use_batchnorm, use_residual = use_residual))
 
         for idx, (d_in, d_out) in enumerate(zip([emb_dim]+num_mlp_layer[:-1], num_mlp_layer)):
@@ -118,7 +103,6 @@ class GNNDiffPool(nn.Module):
             pool_index, pool_weight = tg_utils.dense_to_sparse(adj_pool)
             num_batch, num_nodes, _ = x_pool.size()
             x = x_pool.view(num_batch*num_nodes, num_features)
-
         x = x_pool.mean(dim=1)
         x = self.lin_mlp(x)
 

@@ -9,5 +9,6 @@ feature_study.py
 test_*
 log
 TestBed
+*.h5
 *.swp
 .ipynb_checkpoints

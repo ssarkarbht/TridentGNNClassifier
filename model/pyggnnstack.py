@@ -21,7 +21,7 @@ import torch_geometric.utils as tg_utils
 import torch_geometric.data as tg_data
 
 class GNNStack(nn.Module):
-    def __init__(self, input_dim, hidden_graph_dim=[32,32,32], output_dim=32, 
+    def __init__(self, input_dim, hidden_graph_dim=[32,32,32], output_dim=32, output_activation=True,
                 dropout_rate=0.3, use_batchnorm=True, use_residual=False, **kwargs):
         super(GNNStack, self).__init__(**kwargs)
 
@@ -29,9 +29,6 @@ class GNNStack(nn.Module):
         self.dropout_rate = dropout_rate
         self.batchnorm = use_batchnorm
         self.residual  = use_residual
-
-        #initialize the gaussian kernel
-        self.kernel = GaussKernel()
 
         #initialize the modulelist for graph model parameters containers
         self.graph_layers = nn.ModuleList()
@@ -47,18 +44,21 @@ class GNNStack(nn.Module):
         #Add the last hidden layer to output layer
         self.graph_layers.append(self.conv_builder(hidden_graph_dim[-1], output_dim,
                                  use_batchnorm  = False,
-                                 use_activation = True,
+                                 use_activation = output_activation,
                                  use_residual   = False,
                                  use_dropout    = False))
 
-    def conv_builder(self, input_dim, output_dim, use_batchnorm=True, use_activation=True, use_residual=True, use_dropout=True):
+    def conv_builder(self, input_dim, output_dim, use_batchnorm=True, use_activation=True, activation='ReLU', use_residual=True, use_dropout=True):
         mod_list=[]
         mod_list.append((tg_nn.GCNConv(input_dim, output_dim, add_self_loops=True, normalize=True, bias=True),
                          'x, edge_index, edge_weight -> x'))
         if use_batchnorm:
             mod_list.append((tg_nn.BatchNorm(output_dim), 'x -> x'))
         if use_activation:
-            mod_list.append(nn.ReLU())
+            if activation=='ReLU':
+                mod_list.append(nn.ReLU())
+            elif activation=='SoftMax':
+                mod_list.append(nn.Softmax(dim=1))
         if use_dropout:
             mod_list.append((nn.Dropout(self.dropout_rate), 'x -> x'))
         conv_layer = tg_nn.Sequential('x, edge_index, edge_weight', mod_list)
@@ -77,8 +77,8 @@ class GaussKernel(nn.Module):
     '''
     def __init__(self, *args, **kwargs):
         super(GaussKernel, self).__init__(*args, **kwargs)
-        self.inverse_sigma1 = nn.Parameter(torch.rand(1) * 0.01 + 0.08)
-        self.inverse_sigma2 = nn.Parameter(torch.rand(1) * 0.02 + 0.80)
+        self.inverse_sigma1 = nn.Parameter(torch.rand(1) * 1e-4  + 1e-3)
+        self.inverse_sigma2 = nn.Parameter(torch.rand(1)  + 1.00)
 
     def forward(self, edge_coordinate, edge_index):
         D, T = get_edge_weight(edge_coordinate, edge_index)

@@ -79,7 +79,7 @@ def evaluate_model(model, data_loader, loss_function, prefix, iteration, tb_writ
     total_loss = 0
     for batch_idx, data in enumerate(data_loader):
         print(f'\rEvaluating {batch_idx + 1} / {len(data_loader)}', end='\r')
-        emb, y_pred_i = model(data)
+        y_pred_i, _, _, _ = model(data)
         y_i = data.y.unsqueeze(1)
         loss = loss_function(y_pred_i, y_i)
         y_pred[batch_idx * data_loader.batch_size : (batch_idx + 1) * data_loader.batch_size] = y_pred_i.data.cpu().numpy().squeeze()
@@ -166,9 +166,9 @@ if __name__ == '__main__':
     batch_size = settings['training']['batch_size']
 
     data_train, data_val, data_test = util.pygdataset_from_config(settings)
-    train_loader = pyg_data.DataLoader(data_train, batch_size=batch_size, shuffle=settings['dataset']['shuffle'])
-    val_loader = pyg_data.DataLoader(data_val, batch_size=batch_size, shuffle=settings['dataset']['shuffle'])
-    test_loader = pyg_data.DataLoader(data_test, batch_size=batch_size, shuffle=settings['dataset']['shuffle'])
+    train_loader = pyg_data.DataLoader(data_train, batch_size=batch_size, shuffle=settings['dataset']['shuffle'],follow_batch=['graphx'])
+    val_loader = pyg_data.DataLoader(data_val, batch_size=batch_size, shuffle=settings['dataset']['shuffle'],follow_batch=['graphx'])
+    test_loader = pyg_data.DataLoader(data_test, batch_size=batch_size, shuffle=settings['dataset']['shuffle'],follow_batch=['graphx'])
 
     model = util.model_from_config(settings)
     if torch.cuda.is_available():
@@ -206,7 +206,14 @@ if __name__ == '__main__':
         t0 = time.time()
         for batch_idx, data in enumerate(train_loader):
             optimizer.zero_grad()
-            emb, y_pred = model(data)
+            y_pred, _, _, y0 = model(data)
+            yarr = y_pred.data.cpu().numpy()
+            #y0 = y0.data.cpu().numpy()
+            if np.isnan(yarr).any() or yarr.any()>1 or yarr.any()<0:
+                for dig in y0:
+                    print (dig.data.cpu().numpy())
+                assert False, "BUG! Value outside range [0,1]"
+
             targets = data.y.unsqueeze(1)
             loss = loss_function(y_pred, targets)
             loss.backward()
@@ -237,6 +244,7 @@ if __name__ == '__main__':
             validation_metrics[metric].append(value)
         # Update learning rate, scheduler uses last accuracy as cirterion
         if lr_scheduler:
+            #lr_scheduler.step(validation_metrics['accuracy'][-1])
             lr_scheduler.step(validation_metrics['auc'][-1])
 
         # Save model parameters
